@@ -1,6 +1,6 @@
 # **Data-Efficient Learning for Accurate Identification of MAPK1 Inhibitors Using an Active Meta-Deep Learning Framework**
 
-![Sample Figure](meta_neuralnet_graphic.png)
+![Sample Figure](graphic_abstract.png)
 
 ### Darlene Nabila Zetta*, Tarapong Srisongkram**
 *Graduate School in the Program of Pharmaceutical Sciences, Faculty of Pharmaceutical Sciences, Khon Kaen University, Thailand. (darlenenabilazetta.d@kkumail.com)
