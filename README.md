@@ -7,7 +7,7 @@
 
 **Division of Pharmaceutical Chemistry, Faculty of Pharmaceutical Sciences, Khon Kaen University, Thailand. (tarasri@kku.ac.th)
 
-Full paper submitted in **JCIM**.
+Full paper submitted in **Journal of Chemical Information and Modeling**.
 
 ### MIT License
 Copyright (c) [2025] [Dr.Tarapong Srisongram]
