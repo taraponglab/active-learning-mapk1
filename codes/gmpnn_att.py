@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+from datetime import datetime
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,15 +10,17 @@ from rdkit import Chem
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import NNConv
-from sklearn.metrics import (
-    accuracy_score, roc_auc_score, average_precision_score,
-    matthews_corrcoef
-)
+from sklearn.metrics import accuracy_score, roc_auc_score, average_precision_score, matthews_corrcoef
 from sklearn.model_selection import train_test_split
 from torch_geometric.utils import to_dense_batch
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
-# --- Atom and Bond Features ---
+# ======================
+# --- Atom & Bond Features ---
+# ======================
 def atom_features(atom):
     return torch.tensor([
         atom.GetAtomicNum(),
@@ -39,7 +43,9 @@ def bond_features(bond):
     ], dtype=torch.float)
 
 
-# --- Convert SMILES to PyG Data object ---
+# ======================
+# --- Convert SMILES to PyG Graph ---
+# ======================
 def mol_to_graph(smiles, label=None):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -50,7 +56,7 @@ def mol_to_graph(smiles, label=None):
 
     for bond in mol.GetBonds():
         i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        edge_index += [[i, j], [j, i]]  # Undirected
+        edge_index += [[i, j], [j, i]]  # Undirected graph
         feat = bond_features(bond)
         edge_attr += [feat, feat]
 
@@ -60,9 +66,7 @@ def mol_to_graph(smiles, label=None):
     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
     if label is not None:
         data.y = torch.tensor([label], dtype=torch.float)
-
     return data
-
 
 
 def is_valid_molecule(smiles):
@@ -72,19 +76,18 @@ def is_valid_molecule(smiles):
     return mol is not None and any(atom.GetAtomicNum() == 6 for atom in mol.GetAtoms())
 
 
-# --- Load and Preprocess Data ---
+# ======================
+# --- Data Loading & Preprocessing ---
+# ======================
 def load_data(file_path, smiles_col, label_col):
     df = pd.read_csv(file_path)
-    #df[label_col] = df[label_col].map({"Active": 1, "Inactive": 0})
     df = df[df[smiles_col].apply(is_valid_molecule)].reset_index(drop=True)
     df = df.dropna(subset=[smiles_col])
     return df
 
 
-def split_data(train_val_df, smiles_col, label_col):
-    train_df, val_df = train_test_split(train_val_df, test_size=0.2, stratify=train_val_df[label_col], random_state=42)
-    train_df.to_csv("train.csv", index=False)
-    val_df.to_csv("val.csv", index=False)
+def split_data(df, smiles_col, label_col):
+    train_df, val_df = train_test_split(df, test_size=0.2, stratify=df[label_col], random_state=42)
     return train_df, val_df
 
 
@@ -93,7 +96,9 @@ def convert_to_graphs(df, smiles_col, label_col):
     return df['graph'].dropna().tolist()
 
 
-
+# ======================
+# --- GMPNN Model ---
+# ======================
 class GNNClassifier(nn.Module):
     def __init__(self, node_dim, edge_dim, hidden_dim=64, num_heads=4):
         super(GNNClassifier, self).__init__()
@@ -135,8 +140,9 @@ class GNNClassifier(nn.Module):
         x = F.relu(self.lin1(graph_embeddings))
         return self.lin2(x).squeeze(1)
 
-
-# --- Metrics ---
+# ======================
+# --- Evaluation ---
+# ======================
 def evaluate(model, loader, device):
     model.eval()
     y_true, y_logits = [], []
@@ -160,23 +166,66 @@ def evaluate(model, loader, device):
     return acc, auc, auprc, mcc, y_probs, y_pred
 
 
+def predict_and_save(model, loader, df, set_name, results_dir, device):
+    acc, auc, auprc, mcc, y_prob, y_pred = evaluate(model, loader, device)
+    cid_list = df["PUBCHEM_CID"].values
 
+    prob_df = pd.DataFrame({
+        "PUBCHEM_CID": cid_list,
+        "y_prob": y_prob
+    })
+    prob_df.to_csv(f"{results_dir}/{set_name}_prob.csv", index=False)
+
+    pred_df = pd.DataFrame({
+        "PUBCHEM_CID": cid_list,
+        "y_pred": y_pred
+    })
+    pred_df.to_csv(f"{results_dir}/{set_name}_pred.csv", index=False)
+
+    return y_prob, y_pred
+
+
+# ======================
 # --- Main ---
+# ======================
 if __name__ == "__main__":
-    name = "GNN_attention_run"
-    print(f"Model: {name}")
-    print("📊 Loading and preprocessing data...\n")
+    import argparse
 
-    filename = 'data'
-    file_path = f"{filename}/smiles/x_subset.csv"
+    parser = argparse.ArgumentParser(description="Train GCN model for molecular properties")
+    parser.add_argument("--subset", type=str, required=True, help="Path to subset CSV for training")
+    parser.add_argument("--test", type=str, required=True, help="Path to test CSV")
+    parser.add_argument("--output_folder", type=str, default=".", help="Folder to save outputs")
+    parser.add_argument("--iter", type=int, default=1, help="Iteration number")
+    parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("--verbose", type=int, default=1, help="Verbosity level: 0=silent, 1=verbose")
+
+    args = parser.parse_args()
+
+    verbose = args.verbose
+    current_iteration = args.iter
+    train_csv = args.subset
+    test_csv = args.test
+    results_dir = args.output_folder
+    os.makedirs(results_dir, exist_ok=True)
+    epochs = args.epochs
+    batch_size = args.batch_size
+
+    print(f"\n🚀 Starting PyTorch GCN training | Iteration {current_iteration}")
+    print(f"Train CSV: {train_csv}")
+    print(f"Test CSV: {test_csv}")
+    print(f"Output folder: {results_dir}")
+    print(f"Epochs: {epochs} | Batch size: {batch_size}\n")
+
+    # --- Load data ---
     smiles_col = "SMILES"
     label_col = "Label"
 
-    df = load_data(file_path, smiles_col, label_col)
+    df = load_data(train_csv, smiles_col, label_col)
     print(f"Number of valid SMILES: {len(df)}")
 
     train_df, val_df = split_data(df, smiles_col, label_col)
-    test_df = pd.read_csv(os.path.join('data/smiles', 'x_test.csv'))
+    test_df = pd.read_csv(test_csv)
 
     train_graphs = convert_to_graphs(train_df, smiles_col, label_col)
     val_graphs = convert_to_graphs(val_df, smiles_col, label_col)
@@ -184,12 +233,12 @@ if __name__ == "__main__":
 
     print(f"📊 Train: {len(train_graphs)} | Val: {len(val_graphs)} | Test: {len(test_graphs)}")
 
-    # Loaders
-    train_loader = DataLoader(train_graphs, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_graphs, batch_size=32)
-    test_loader = DataLoader(test_graphs, batch_size=32)
+    # --- DataLoaders ---
+    train_loader = DataLoader(train_graphs, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_graphs, batch_size=batch_size)
+    test_loader = DataLoader(test_graphs, batch_size=batch_size)
 
-    # Model setup
+    # --- Device & Model ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     node_dim = train_graphs[0].x.shape[1]
     edge_dim = train_graphs[0].edge_attr.shape[1]
@@ -200,9 +249,9 @@ if __name__ == "__main__":
                                len(train_df[train_df[label_col] == 1])], dtype=torch.float).to(device)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    # Training
-    print("🧪 Start training...\n")
-    for epoch in range(1, 21):
+    start_train_time = time.time()
+    # --- Training Loop ---
+    for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0
         for batch in train_loader:
@@ -215,53 +264,49 @@ if __name__ == "__main__":
             total_loss += loss.item() * batch.num_graphs
 
         avg_loss = total_loss / len(train_loader.dataset)
-        acc, auc, auprc, mcc, y_prob, y_pred = evaluate(model, val_loader, device)
-        print(f"Epoch {epoch:02d} | Train Loss: {avg_loss:.4f} | Val Acc: {acc:.4f} | AUROC: {auc:.4f} | AUPRC: {auprc:.4f} | MCC: {mcc:.4f}")
 
-    torch.save(model.state_dict(), f"model_{name}.keras")
+        if verbose:
+            acc, auc, auprc, mcc, _, _ = evaluate(model, val_loader, device)
+            print(f"Epoch {epoch:02d} | Train Loss: {avg_loss:.4f} | "
+                  f"Val Acc: {acc:.4f} | AUROC: {auc:.4f} | "
+                  f"AUPRC: {auprc:.4f} | MCC: {mcc:.4f}")
+    end_train_time = time.time()
+    training_time = end_train_time - start_train_time
 
-    # Evaluate and save predictions
-    print("\n📊 Final Test Set Evaluation")
 
-    def predict_and_save(loader, df, set_name):
-        acc, auc, auprc, mcc, y_prob, y_pred = evaluate(model, loader, device)
-        cid_list = df["PUBCHEM_CID"].values
+    # --- Save Model ---
+    torch.save(model.state_dict(), f"{results_dir}/gmpnn_att_model.pt")
 
-        prob_df = pd.DataFrame({
-            "PUBCHEM_CID": cid_list,
-            "y_prob": y_prob
-        })
-        prob_df.to_csv(f"{set_name}_prob_{name}.csv", index=False)
+    # === Final predictions on Test Set ===
+    pred_start_time = time.time()
 
-        pred_df = pd.DataFrame({
-            "PUBCHEM_CID": cid_list,
-            "y_pred": y_pred
-        })
-        pred_df.to_csv(f"{set_name}_pred_{name}.csv", index=False)
-        return y_prob, y_pred
+    # --- Predict & Save ---
+    print("\n📊 Saving Predictions...")
+    predict_and_save(model, train_loader, train_df, "train", results_dir, device)
+    predict_and_save(model, val_loader, val_df, "val", results_dir, device)
+    predict_and_save(model, test_loader, test_df, "test", results_dir, device)
 
-    # Save train, val, test predictions
-    train_loader_all = DataLoader(train_graphs, batch_size=32)
-    val_loader_all = DataLoader(val_graphs, batch_size=32)
-    test_loader_all = DataLoader(test_graphs, batch_size=32)
+    # --- Final Test Metrics ---
+    acc, auc, auprc, mcc, _, _ = evaluate(model, test_loader, device)
+    print(f"\n✅ Final Test Evaluation | Acc: {acc:.4f}, AUROC: {auc:.4f}, AUPRC: {auprc:.4f}, MCC: {mcc:.4f}")
 
-    y_prob_train, y_pred_train = predict_and_save(train_loader_all, train_df, "train")
-    y_prob_val, y_pred_val = predict_and_save(val_loader_all, val_df, "val")
-    y_prob_test, y_pred_test = predict_and_save(test_loader_all, test_df, "test")
+    end_eval_time = time.time()
+    evaluation_time = end_eval_time - pred_start_time
 
-    # Final Test Evaluation
-    acc, auc, auprc, mcc, y_probs, y_pred = evaluate(model, test_loader_all, device)
-    print(f"[{name},{acc:.4f},{auc:.4f},{auprc:.4f},{mcc:.4f}]")
+    # === Record Training Information ===
+    total_time = training_time + evaluation_time
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # --- Save results summary ---
     result_row = {
-        "Model": name,
+        "Model": f"GCNN_iter{current_iteration}",
         "Accuracy": round(acc, 3),
         "AUROC": round(auc, 3),
         "AUPRC": round(auprc, 3),
         "MCC": round(mcc, 3)
     }
 
-    result_file = "result.csv"
+    result_file = os.path.join(results_dir, "result.csv")
     try:
         results_df = pd.read_csv(result_file)
     except FileNotFoundError:
@@ -269,3 +314,28 @@ if __name__ == "__main__":
 
     results_df = pd.concat([results_df, pd.DataFrame([result_row])], ignore_index=True)
     results_df.to_csv(result_file, index=False)
+
+    print(f"✅ Results saved to {results_dir}/result.csv")
+
+    training_info = {
+        "Run_number": [current_iteration],
+        "Total training time(s)": [total_time],
+        "Model training time(s)": [training_time],
+        "Prediction time(s)": [evaluation_time],
+        "Epochs": [epochs],
+        "Batch_size": [batch_size],
+        "Test_size": [len(test_graphs)],
+        "Timestamp": [timestamp]
+    }
+
+    # Convert dictionary to DataFrame
+    training_info_df = pd.DataFrame(training_info)
+
+    # Append to CSV (or create if not exists)
+    training_info_path = os.path.join(results_dir, "training_info.csv")
+    training_info_df.to_csv(
+        training_info_path,
+        mode='a',  # append mode
+        header=not os.path.exists(training_info_path),
+        index=False
+    )

@@ -48,16 +48,16 @@ def calculate_descriptors(df, smiles_col):
 # Example usage
 if __name__ == "__main__":
     # Sample DataFrame
-    df = pd.read_csv('data/smiles.csv')
+    df = pd.read_csv('smiles-naturalproduct-np-mrd/cleaned/smiles_NP0300001_NP0350000_cleaned.csv')
     
     # Calculate RDKit fingerprints
-    descriptors = calculate_descriptors(df, 'SMILES')
+    descriptors = calculate_descriptors(df, 'canonical_smiles')
     
     # Add PUBCHEM_CID as the first column and Label in the last column
-    descriptors.insert(0, 'PUBCHEM_CID', df['PUBCHEM_CID'])
-    descriptors['Label'] = df['Label'].map({'Active': 1, 'Inactive': 0})
+    descriptors.insert(0, 'Natural_Products_Name', df['Natural_Products_Name'])
+    #descriptors['Label'] = df['Label'].map({'Active': 1, 'Inactive': 0})
     # Save the resulting DataFrame to a CSV file
-    output_file = 'descriptors.csv'
+    output_file = 'smiles-naturalproduct-np-mrd/descriptor/smiles_NP0300001_NP0350000_descriptors.csv'
     descriptors.to_csv(output_file, index=False)
 
     # Display the result

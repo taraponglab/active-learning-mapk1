@@ -1,68 +1,33 @@
 import pandas as pd
-import numpy as np
 import os
 import argparse
-from scipy.stats import entropy
 
 # --------------------------------------------------------------
-# STEP 1 — ENTROPY-BASED UNCERTAINTY
+# RANDOM SELECTION
 # --------------------------------------------------------------
-
-def calculate_entropy(meta_prob_file):
+def select_top_random(all_data_df, top_percent, iteration, file_path):
     """
-    Compute entropy-based uncertainty from probability predictions.
-    Higher entropy → more uncertain.
+    Randomly select a percentage of compounds from all_data_df.
     """
-    df = pd.read_csv(meta_prob_file)
-    if 'meta_prob' not in df.columns:
-        raise ValueError("Column 'meta_prob' not found in meta probability file")
-    # Binary classification: compute probability for class 0
-    df['meta_prob_0'] = 1 - df['meta_prob']
+    n_select = max(1, int(len(all_data_df) * top_percent))
+    top_random = all_data_df.sample(n=n_select, random_state=42)  # reproducible
 
-    # Required columns check
-    required = {"PUBCHEM_CID", "meta_prob", "meta_prob_0"}
-    if not required.issubset(df.columns):
-        raise ValueError(f"❌ Missing required columns: {required - set(df.columns)}")
+    out_file = os.path.join(file_path, f"top_random_samples_iter{iteration}.csv")
+    top_random.to_csv(out_file, index=False)
+    print(f"[INFO] Top {n_select} randomly selected compounds saved → {out_file}")
 
-    # Keep only probability columns (exclude PUBCHEM_CID and meta_label)
-    proba_cols = [c for c in df.columns if c not in ['PUBCHEM_CID', 'meta_label']]
-    proba = df[proba_cols].values.T  # transpose for scipy entropy
-    entropies = entropy(proba)        # calculate entropy
-    df['y_prob_entropy'] = entropies
-
-    # Sort descending → highest entropy = most uncertain
-    df = df.sort_values(by='y_prob_entropy', ascending=False)
-
-    return df
-
+    return top_random
 
 # --------------------------------------------------------------
-# STEP 2 — SELECT HIGHEST ENTROPY
+# SPLIT DATASET INTO SELECTED + REMAINING
 # --------------------------------------------------------------
-
-def select_top_entropy(uncertainty_df, top_percent, iteration, file_path):
-    n_select = max(1, int(len(uncertainty_df) * top_percent))
-    top_uncertain = uncertainty_df.head(n_select)
-
-    out_file = os.path.join(file_path, f"top_entropy_samples_iter{iteration}.csv")
-    top_uncertain.to_csv(out_file, index=False)
-    print(f"[INFO] Top {n_select} entropy-uncertain compounds saved → {out_file}")
-
-    return top_uncertain
-
-
-# --------------------------------------------------------------
-# STEP 3 — SPLIT DATASET INTO SELECTED + REMAINING
-# (No change from original code)
-# --------------------------------------------------------------
-
-def split_dataset(all_data_file, previous_subset_file, top_uncertain_df, iteration, file_path):
+def split_dataset(all_data_file, previous_subset_file, top_df, iteration, file_path):
     all_data = pd.read_csv(all_data_file)
 
     merged = all_data.merge(
-        top_uncertain_df[['PUBCHEM_CID']], 
-        on='PUBCHEM_CID', 
-        how='left', 
+        top_df[['PUBCHEM_CID']],
+        on='PUBCHEM_CID',
+        how='left',
         indicator=True
     )
 
@@ -79,18 +44,14 @@ def split_dataset(all_data_file, previous_subset_file, top_uncertain_df, iterati
     # Merge with previous subset
     prev_df = pd.read_csv(previous_subset_file)
     combined_df = pd.concat([top_subset, prev_df], ignore_index=True)
-
     merged_output = os.path.join(file_path, f"subset_merged_iter{iteration}.csv")
     combined_df.to_csv(merged_output, index=False)
 
     return top_file, remaining_file
 
-
 # --------------------------------------------------------------
-# STEP 4 — SPLIT DESCRIPTORS FOR NEW + REMAINING
-# (No change from original code)
+# SPLIT DESCRIPTORS FOR NEW + REMAINING
 # --------------------------------------------------------------
-
 def split_descriptors(all_descriptors_file, top_file, remaining_file, previous_descriptors_file, iteration, file_path):
     descriptors_df = pd.read_csv(all_descriptors_file)
     top_df = pd.read_csv(top_file)
@@ -107,17 +68,14 @@ def split_descriptors(all_descriptors_file, top_file, remaining_file, previous_d
 
     prev_desc = pd.read_csv(previous_descriptors_file)
     combined_desc = pd.concat([top_desc, prev_desc], ignore_index=True)
-
     merged_desc_file = os.path.join(file_path, f"subset_merged_descriptors_iter{iteration}.csv")
     combined_desc.to_csv(merged_desc_file, index=False)
 
     print(f"[INFO] Descriptor split done. Combined descriptor size: {len(combined_desc)}")
 
-
 # --------------------------------------------------------------
 # MAIN
 # --------------------------------------------------------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
@@ -126,28 +84,25 @@ if __name__ == "__main__":
     parser.add_argument("--previous_subset_file", required=True)
     parser.add_argument("--previous_descriptors_file", required=True)
     parser.add_argument("--all_data_descriptors_file", required=True)
-    parser.add_argument("--meta_prob_file", required=True)
     parser.add_argument("--iteration", type=int, required=True)
     parser.add_argument("--top_percent", type=float, default=0.05)
 
     args = parser.parse_args()
 
-    # 1. Entropy-based uncertainty
-    entropy_df = calculate_entropy(args.meta_prob_file)
+    # Load all data and select randomly
+    all_data_df = pd.read_csv(args.all_data_file)
+    top_df = select_top_random(all_data_df, args.top_percent, args.iteration, args.file_path)
 
-    # 2. Select top uncertain (highest entropy)
-    top_entropy_df = select_top_entropy(entropy_df, args.top_percent, args.iteration, args.file_path)
-
-    # 3. Dataset split
+    # Dataset split
     top_file, remaining_file = split_dataset(
         args.all_data_file,
         args.previous_subset_file,
-        top_entropy_df,
+        top_df,
         args.iteration,
         args.file_path
     )
 
-    # 4. Descriptor split
+    # Descriptor split
     split_descriptors(
         args.all_data_descriptors_file,
         top_file,

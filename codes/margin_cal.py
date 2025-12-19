@@ -1,125 +1,166 @@
 import pandas as pd
 import numpy as np
 import os
+import argparse
 
-def get_prob_0(name, df):
-    # Check if the 'class_1_proba' column exists
-    if 'y_pred_meta' in df.columns:
-        # Calculate the class 0 probabilities
-        df['y_pred_meta_0'] = 1 - df['y_pred_meta']
 
-        # Save the updated DataFrame to a new CSV file
-        df.to_csv(os.path.join(name, 'y_prob_pool_meta_binary.csv'), index=True)
-        print("The updated CSV file  'y_prob_pool_meta_binary.csv' has been created successfully.")
-    else:
-        print("The column 'y_prob_pool_average' does not exist in the dataset.")
+# --------------------------------------------------------------
+# STEP 1 — MARGIN-BASED UNCERTAINTY
+# --------------------------------------------------------------
 
-def margin(name, df):
-    proba = df.values   # Convert the DataFrame to a NumPy array for easier manipulation
-    # Calculate the margin for each row
+def calculate_margin(meta_prob_file):
+    """
+    Compute margin uncertainty from probability predictions.
+    Margin = difference between highest and second-highest probability.
+    Smaller margin = more uncertain.
+    """
+    df = pd.read_csv(meta_prob_file)
+    if 'meta_prob' not in df.columns:
+        raise ValueError("Column 'meta_prob' not found in meta probability file")
+    # Compute class 0 probability
+    df['meta_prob_0'] = 1 - df['meta_prob']
+
+    # Check required columns
+    required = {"PUBCHEM_CID", "meta_prob", "meta_prob_0"}
+    if not required.issubset(df.columns):
+        raise ValueError(f"❌ Missing required columns: {required - set(df.columns)}")
+
+    # For binary classification with two probabilities: p0 and p1
+    proba = df[['meta_prob_0', 'meta_prob']].values  # or however your columns are named
+
+    # Top two probabilities using partition
     part = np.partition(-proba, 1, axis=1)
-    margins = -part[:, 0] + part[:, 1]
-    df['y_prob_margin'] = margins  # Create a new DataFrame for the margins
-    df.to_csv(os.path.join(name, 'margin_prob.csv' ), index=True)
-    print(f"Margins have been calculated and saved.")
-
-def margin_sort(name, df, percentage):
-    df_sorted = df.sort_values(by='y_prob_margin', ascending=True) # Sort compounds based on the margin
-    n = int(len(df_sorted) * percentage)    # Determine the number of top percentage rows to select
-    # Split the data into two sets
-    margin_subset  = df_sorted.iloc[:n]#.drop(columns=["y_prob_margin"])
-    remaining_data = df_sorted.iloc[n:]#.drop(columns=["y_prob_margin"])
-    # Save the datasets
-    margin_subset.to_csv(os.path.join(name, "margin_subset.csv"), index=True)
-    remaining_data.to_csv(os.path.join(name, "remaining_pool.csv"), index=True)
+    max_p = -part[:, 0]       # largest probability
+    second_p = -part[:, 1]    # second largest probability
+    margins = max_p - second_p  # Margin = difference between top two (positive)
+    df['y_prob_margin'] = margins
     
-    print(f"Split completed: {n} rows saved in 'margin_subset.csv' and {len(df_sorted) - n} in 'remaining_pool.csv'.")
+    # Sort ascending → smallest margin = most uncertain
+    df = df.sort_values(by='y_prob_margin', ascending=True)
 
-def split_y_pool(name, df, margin_subset_df):
-    margin_y_pool = df[df["PUBCHEM_CID"].isin(margin_subset_df["PUBCHEM_CID"])]
-    remaining_y_pool = df[~df["PUBCHEM_CID"].isin(margin_subset_df["PUBCHEM_CID"])]
-    margin_y_pool.to_csv(os.path.join(name, "margin_subset_y_pool.csv"), index=False)
-    remaining_y_pool.to_csv(os.path.join(name, "remaining_y_pool.csv"), index=False)
-    print("y_pool split subset and remaining.")
-
-def split_data(large_filepath, large_filename, list_filepath, list_filename, output_path, filtered_list,remaining_list):
-    """
-    This function is to generate the best 100 compounds and remaining compounds from model predicted following with their canonical_smiles or ecfp into two CSV files.
-    -----
-    large_filepath= the filepath to your large_filename (also for the output filepath later on).
-    large_filename= the file that contains all compounds with their canonical_smiles/ecfp.
-    list_filepath= the filepath to your list_filename.
-    list_filename= the file that contains list of 100 compounds with their affinities as result after predicted.
-    filtered_list= the file that generated and consists of 100 compounds following with their canonical_smiles/ecfp.
-    remaining_list= the file that generated and consists of remaining compounds following with their canonical_smiles/ecfp.
-    """
-    
-    large_df = pd.read_csv(os.path.join(large_filepath, large_filename))        # Load the large data
-    compound_list_df = pd.read_csv(os.path.join(list_filepath, list_filename))  # Load the compound list
-
-    # Check if 'PUBCHEM_CID' columns are in both DataFrames
-    if 'PUBCHEM_CID' not in large_df.columns:
-        print(f"'PUBCHEM_CID' column not found in {large_filename}")
-    if 'PUBCHEM_CID' not in compound_list_df.columns:
-        print(f"'PUBCHEM_CID' column not found in {list_filename}")
-    
-    large_df['PUBCHEM_CID'] = large_df['PUBCHEM_CID'].astype(str).str.strip() # Standardize 'PUBCHEM_CID' data types and strip any leading/trailing whitespace
-    compound_list_df['PUBCHEM_CID'] = compound_list_df['PUBCHEM_CID'].astype(str).str.strip()
-    filtered_list_df = large_df[large_df['PUBCHEM_CID'].isin(compound_list_df['PUBCHEM_CID'])]    # Filter the DataFrame to include only the compounds in the compound list
-    #remaining_list_df = large_df[~large_df['PUBCHEM_CID'].isin(compound_list_df['PUBCHEM_CID'])]  # Filter the ECFP DataFrame to include only the compounds NOT in the compound list
-    
-    # Save the filtered DataFrame to a new CSV file
-    filtered_list_df.to_csv(os.path.join(output_path, filtered_list), index=False)
-
-    # Save the remaining compounds to another CSV file
-    #remaining_list_df.to_csv(os.path.join(output_path, remaining_list), index=False)
+    return df
 
 
-def merge_dataframes(file_paths, output_path, how='outer'):
-    """
-    Merge multiple CSV files into a single DataFrame and save it.
-    
-    Parameters:
-    file_paths (list of str): List of file paths to CSV files to be merged.
-    output_path (str): Path to save the merged DataFrame.
-    how (str): Type of merge to be performed. Options are 'inner', 'outer', 'left', or 'right'. Default is 'outer'.
-    """
-    # Read and merge the DataFrames
-    dfs = [pd.read_csv(file_path) for file_path in file_paths]
-    df_merged = pd.concat(dfs, axis=0, ignore_index=True, join=how)
-    
-    df_merged.to_csv(output_path, index=False)      # Save the merged DataFrame to CSV
+# --------------------------------------------------------------
+# STEP 2 — SELECT LOWEST MARGINS
+# --------------------------------------------------------------
 
-def main():
-    name = "margin4"
-    path_file = 'predict'
-    df = pd.read_csv(os.path.join(name, 'meta_pool_prob.csv'), index_col=0)
-    get_prob_0(name, df)
+def select_top_uncertain(uncertainty_df, top_percent, iteration, file_path):
 
-    df = pd.read_csv(os.path.join(name, "y_prob_pool_meta_binary.csv"), index_col=0)
-    margin(name, df)
-    margin_cal_file = pd.read_csv(os.path.join(name, "margin_prob.csv"), index_col=0)
-    margin_sort(name, margin_cal_file, percentage=0.05)
-    y_pool = pd.read_csv(os.path.join(name, "y_pool.csv"))
-    margin_subset_df = pd.read_csv(os.path.join(name, "margin_subset.csv"))
-    split_y_pool(name, y_pool, margin_subset_df)
+    n_select = max(1, int(len(uncertainty_df) * top_percent))
+    top_uncertain = uncertainty_df.head(n_select)
 
-    large_filepath = 'initial_al'    #/descriptor   /None
-    large_filename = 'x_train.csv'
-    list_filepath = name
-    list_filename = 'margin_subset.csv'
-    output_path = name
-    filtered_list = 'x_subset_0.05.csv'
-    remaining_list = 'remaining_trainset.csv'
-    split_data(large_filepath, large_filename, list_filepath, list_filename, output_path, filtered_list,remaining_list)
-    
-    file_paths = [
-        os.path.join('margin3/smiles', 'x_subset.csv'), #/descriptor    /smiles    
-        os.path.join(name,'x_subset_0.05.csv')
-    ]
-    merge_dataframes(file_paths, os.path.join(name,'x_subset.csv'))
+    out_file = os.path.join(file_path, f"top_margin_samples_iter{iteration}.csv")
+    top_uncertain.to_csv(out_file, index=False)
+    print(f"[INFO] Top {n_select} margin-uncertain compounds saved → {out_file}")
 
-    split_data(large_filepath, large_filename, list_filepath=name, list_filename='remaining_pool.csv', output_path=name, filtered_list='x_pool.csv',remaining_list='remaining.csv')
-    
+    return top_uncertain
+
+
+# --------------------------------------------------------------
+# STEP 3 — SPLIT DATASET INTO SELECTED + REMAINING
+# --------------------------------------------------------------
+
+def split_dataset(all_data_file, previous_subset_file, top_uncertain_df, iteration, file_path):
+
+    all_data = pd.read_csv(all_data_file)
+
+    merged = all_data.merge(
+        top_uncertain_df[['PUBCHEM_CID']], 
+        on='PUBCHEM_CID', 
+        how='left', 
+        indicator=True
+    )
+
+    top_subset = merged[merged['_merge'] == 'both'].drop(columns=['_merge'])
+    remaining_pool = merged[merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+
+    top_file = os.path.join(file_path, f"subset_top_iter{iteration}.csv")
+    remaining_file = os.path.join(file_path, f"pool_remaining_iter{iteration}.csv")
+
+    top_subset.to_csv(top_file, index=False)
+    remaining_pool.to_csv(remaining_file, index=False)
+    print(f"[INFO] Dataset split: {len(top_subset)} top, {len(remaining_pool)} remaining")
+
+    # Merge with previous subset
+    prev_df = pd.read_csv(previous_subset_file)
+    combined_df = pd.concat([top_subset, prev_df], ignore_index=True)
+
+    merged_output = os.path.join(file_path, f"subset_merged_iter{iteration}.csv")
+    combined_df.to_csv(merged_output, index=False)
+
+    return top_file, remaining_file
+
+
+# --------------------------------------------------------------
+# STEP 4 — SPLIT DESCRIPTORS FOR NEW + REMAINING
+# --------------------------------------------------------------
+
+def split_descriptors(all_descriptors_file, top_file, remaining_file, previous_descriptors_file, iteration, file_path):
+
+    descriptors_df = pd.read_csv(all_descriptors_file)
+    top_df = pd.read_csv(top_file)
+    remaining_df = pd.read_csv(remaining_file)
+
+    top_desc = descriptors_df[descriptors_df['PUBCHEM_CID'].isin(top_df['PUBCHEM_CID'])]
+    remaining_desc = descriptors_df[descriptors_df['PUBCHEM_CID'].isin(remaining_df['PUBCHEM_CID'])]
+
+    top_desc_file = os.path.join(file_path, f"subset_top_descriptors_iter{iteration}.csv")
+    remaining_desc_file = os.path.join(file_path, f"pool_remaining_descriptors_iter{iteration}.csv")
+
+    top_desc.to_csv(top_desc_file, index=False)
+    remaining_desc.to_csv(remaining_desc_file, index=False)
+
+    prev_desc = pd.read_csv(previous_descriptors_file)
+    combined_desc = pd.concat([top_desc, prev_desc], ignore_index=True)
+
+    merged_desc_file = os.path.join(file_path, f"subset_merged_descriptors_iter{iteration}.csv")
+    combined_desc.to_csv(merged_desc_file, index=False)
+
+    print(f"[INFO] Descriptor split done. Combined descriptor size: {len(combined_desc)}")
+
+
+# --------------------------------------------------------------
+# MAIN
+# --------------------------------------------------------------
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--file_path", required=True)
+    parser.add_argument("--all_data_file", required=True)
+    parser.add_argument("--previous_subset_file", required=True)
+    parser.add_argument("--previous_descriptors_file", required=True)
+    parser.add_argument("--all_data_descriptors_file", required=True)
+    parser.add_argument("--meta_prob_file", required=True)
+    parser.add_argument("--iteration", type=int, required=True)
+    parser.add_argument("--top_percent", type=float, default=0.05)
+
+    args = parser.parse_args()
+
+    # 1. Margin uncertainty
+    margin_df = calculate_margin(args.meta_prob_file)
+
+    # 2. Select top uncertain
+    top_uncertain_df = select_top_uncertain(
+        margin_df, args.top_percent, args.iteration, args.file_path
+    )
+
+    # 3. Dataset split
+    top_file, remaining_file = split_dataset(
+        args.all_data_file,
+        args.previous_subset_file,
+        top_uncertain_df,
+        args.iteration,
+        args.file_path
+    )
+
+    # 4. Descriptor split
+    split_descriptors(
+        args.all_data_descriptors_file,
+        top_file,
+        remaining_file,
+        args.previous_descriptors_file,
+        args.iteration,
+        args.file_path
+    )

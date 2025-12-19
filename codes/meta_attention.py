@@ -4,8 +4,8 @@ import argparse
 import pandas as pd
 import numpy as np
 from tensorflow import keras
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten, Conv1D, MaxPooling1D
+from keras.models import Model
+from keras.layers import Input, Dense, Reshape, Attention
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, matthews_corrcoef, roc_auc_score, average_precision_score
@@ -17,18 +17,15 @@ warnings.filterwarnings("ignore")
 # =========================================
 # MODEL DEFINITIONS
 # =========================================
-def cnn_model(fingerprint_length):
-    model = Sequential()
-    model.add(Conv1D(32, kernel_size=3, padding='same', input_shape=(fingerprint_length,1), activation='relu'))
-    model.add(MaxPooling1D(pool_size=2))
-    model.add(Conv1D(64, 3, padding='same', activation='relu'))
-    model.add(MaxPooling1D(pool_size=2))
-    model.add(Dropout(0.3))
-    model.add(Flatten())
-    model.add(Dense(128, activation='relu'))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(1, activation='sigmoid'))
-    model.compile(loss='binary_crossentropy', optimizer=keras.optimizers.Adam(learning_rate=0.001), metrics=['accuracy'])
+def attention_model(fingerprint_length):
+    input_layer = Input(shape=(fingerprint_length,))
+    dense_layer = Dense(64, activation='relu')(input_layer)
+    reshape_layer = Reshape((1, 64))(dense_layer)
+    attention_layer = Attention(use_scale=True)([reshape_layer, reshape_layer])
+    attention_output = Reshape((64,))(attention_layer)
+    output_layer = Dense(1, activation='sigmoid')(attention_output)
+    model = Model(inputs=input_layer, outputs=output_layer)
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
     return model
 
 # =========================================
@@ -63,7 +60,7 @@ def main():
     parser.add_argument("--input", type=str, required=True, help="Path to input CSV for training")
     parser.add_argument("--test", type=str, help="Path to test CSV")
     parser.add_argument("--output_folder", type=str, required=True, help="Folder to save outputs")
-    parser.add_argument("--model_type", type=str, default="cnn", help="Choose model type")
+    parser.add_argument("--model_type", type=str, default="attention", help="Choose model type")
     parser.add_argument("--iter", type=int, default=1, help="Iteration number")
     parser.add_argument("--epochs", type=int, default=20, help="Number of epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
@@ -80,7 +77,7 @@ def main():
     # Load data
     df = pd.read_csv(args.input)
     train_df, val_df = split_data(df, label_col=LABEL_COL)
-    test_df = test_df = pd.read_csv(args.test)
+    test_df = pd.read_csv(args.test)
 
     X_train, y_train = train_df.drop(columns=DROP_COLS).values, train_df[LABEL_COL].values
     X_val, y_val = val_df.drop(columns=DROP_COLS).values, val_df[LABEL_COL].values
@@ -95,18 +92,18 @@ def main():
 
     # Choose model
     fingerprint_length = X_train.shape[1]
-    if args.model_type == "cnn":
+    if args.model_type == "attention":
         X_train = np.expand_dims(X_train, axis=-1)
         X_val = np.expand_dims(X_val, axis=-1)
         X_test = np.expand_dims(X_test, axis=-1)
-        model = cnn_model(fingerprint_length)
+        model = attention_model(fingerprint_length)
 
     # Train model and record time
     start_train_time = time.time()
     model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=args.epochs, batch_size=args.batch_size)
     end_train_time = time.time()
     training_time = end_train_time - start_train_time
-    model.save(os.path.join(out_folder, "meta_cnn_model.keras"))
+    model.save(os.path.join(out_folder, "meta_attention_model.keras"))
     
     pred_start_time = time.time()
     # === Evaluate and save predictions & metrics ===
