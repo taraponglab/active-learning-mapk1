@@ -9,6 +9,10 @@
 
 Full paper submitted in **Journal of Cheminformatics**.
 
+## Usage
+
+Detailed usage instructions are located in `README_USAGE.md`. See [README_USAGE.md](README_USAGE.md) for full preprocessing, descriptor calculation, model training, AL workflows, brute-force experiments, and RF baseline instructions.
+
 ### MIT License
 Copyright (c) [2025] [Dr.Tarapong Srisongram]
 
