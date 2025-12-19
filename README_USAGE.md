@@ -3,6 +3,13 @@ Usage
 
 Overview: This repository contains code to preprocess chemical SMILES data, compute physicochemical descriptors, train several baseline and graph neural network models, run meta-models, and perform active learning (AL) experiments using multiple strategies (random, uncertainty, margin, entropy). The main orchestration scripts live in `codes/` and example data live under `data/`.
 
+Create a virtual environment with Python 3.11.
+Install dependencies from `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
 - Preprocess data: edit `codes/preprocess.py` to change the `file_name` variable to your input CSV (it writes canonical SMILES to a cleaned CSV). Then run:
 
 ```bash
