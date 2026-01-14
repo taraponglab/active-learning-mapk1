@@ -1,4 +1,4 @@
-# Usage + Model Update — Adding new data for retraining
+# Model Update — Adding new data for retraining
 
 This file is instructions for adding new data and running update/retraining experiments.
 
